@@ -1,0 +1,93 @@
+# docker-compose.yml
+# This file defines and runs multi-container Docker applications.
+# It now includes Node Exporter for host metrics, cAdvisor for container metrics,
+# NVIDIA SMI Exporter for GPU metrics, and Turbostat Exporter for detailed CPU states.
+
+services:
+  # Node Exporter: Exposes a wide range of hardware and OS metrics.
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    hostname: "{{ .Node.Hostname }}"
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/sys'
+      - '--path.rootfs=/rootfs'
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9100/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # cAdvisor (Container Advisor): Provides container usage and performance metrics.
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    networks:
+      - monitoring-net
+
+  # NVIDIA SMI Exporter: Exposes GPU metrics from NVIDIA GPUs using nvidia-smi.
+  # IMPORTANT: Requires NVIDIA Container Toolkit (nvidia-container-runtime) installed on the host.
+  nvidia-smi-exporter:
+    image: utkuozdemir/nvidia_gpu_exporter:1.3.2 # Using specific version tag as discussed
+    container_name: nvidia-smi-exporter
+    restart: unless-stopped
+    ports:
+      - "9835:9835"
+    runtime: nvidia # CRUCIAL for GPU access
+    environment: {} # Explicitly empty mapping
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:9835/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Turbostat Exporter: Exposes detailed CPU C-states and P-states metrics.
+  # IMPORTANT: Requires --privileged mode and the 'msr' kernel module loaded on the host.
+  # This image is from ghcr.io (GitHub Container Registry).
+  turbostat-exporter:
+    image: ghcr.io/blackdark/prometheus_turbostat_exporter:main # Using the discovered image
+    container_name: turbostat-exporter
+    restart: unless-stopped
+    ports:
+      - "9101:9101" # Default port for this exporter
+    privileged: true # REQUIRED for turbostat to access CPU MSRs
+    volumes:
+      # Mount /dev/cpu/msr to allow turbostat to read CPU registers
+      - /dev/cpu:/dev/cpu:ro
+    networks:
+      - monitoring-net
+    healthcheck: # Health check for Turbostat Exporter
+      test: ["CMD", "curl", "--fail", "http://localhost:9101/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+# Define custom networks
+networks:
+  monitoring-net:
+    driver: bridge
